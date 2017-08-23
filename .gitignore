@@ -1,0 +1,5 @@
+#ignore temporary files
+*.so
+*.o
+*.ll
+a.out
