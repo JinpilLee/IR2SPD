@@ -16,4 +16,4 @@ try: src
 	opt -load ./IR2SPD.so -generate-spd sample.ll -S > /dev/null
 
 clean:
-	@rm -f *.so *.o sample.ll
+	@rm -f *.so *.o sample.ll *.spd

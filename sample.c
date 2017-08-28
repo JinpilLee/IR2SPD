@@ -20,7 +20,7 @@ void no_output(int a) {
 }
 
 float useparam(float tmp) {
-  float tmp2 = tmp + 30.0;
-  tmp2 = tmp2 / 10.0;
-  return tmp2 * 30.0;
+  float tmp2 = tmp + 30;
+  tmp2 = tmp2 / 10;
+  return tmp2 * 30;
 }
