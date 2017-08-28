@@ -175,9 +175,8 @@ void IR2SPD::emitConstantParams(raw_ostream &OS,
 
 void IR2SPD::translateValue(raw_ostream &OS, Value *V,
                             IntParamTy &IntParams, FPParamTy &FPParams) const {
-  OS << "t_";
   if (V->hasName()) {
-    OS << V->getName().str();
+    OS << "t_" << V->getName().str();
   }
   else if (isa<ConstantInt>(V)) {
     OS << "ci_" << findIntParam(IntParams,
