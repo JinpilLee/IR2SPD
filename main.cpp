@@ -63,6 +63,7 @@ private:
   void translateValue(raw_ostream &OS, Value *V,
                       IntParamTy &IntParams, FPParamTy &FPParams) const;
   void translateOpcode(raw_ostream &OS, unsigned Opcode) const;
+  void emitNodeExpr(raw_ostream &OS);
   void translateInstruction(raw_ostream &OS, Instruction &Instr,
                             IntParamTy &IntParams, FPParamTy &FPParams);
 };
@@ -98,7 +99,18 @@ bool IR2SPD::runOnFunction(Function &F) {
   }
 
   // print output port
-  OS << "Main_Out\t\t{main_o::o_0};\n";
+  Type *RetTy = F.getReturnType();
+  switch (RetTy->getTypeID()) {
+  case Type::VoidTyID:
+    break;
+  case Type::IntegerTyID:
+  case Type::FloatTyID:
+  case Type::DoubleTyID:
+    OS << "Main_Out\t\t{main_o::O_ret};\n";
+    break;
+  default:
+    llvm_unreachable("wrong return type");
+  }
 
   // collect param
   IntParamTy IntParams;
@@ -175,10 +187,7 @@ void IR2SPD::emitConstantParams(raw_ostream &OS,
 
 void IR2SPD::translateValue(raw_ostream &OS, Value *V,
                             IntParamTy &IntParams, FPParamTy &FPParams) const {
-  if (V->hasName()) {
-    OS << "t_" << V->getName().str();
-  }
-  else if (isa<ConstantInt>(V)) {
+  if (isa<ConstantInt>(V)) {
     OS << "ci_" << findIntParam(IntParams,
                                 dyn_cast<ConstantInt>(V)->getValue());
   }
@@ -187,7 +196,8 @@ void IR2SPD::translateValue(raw_ostream &OS, Value *V,
                                dyn_cast<ConstantFP>(V)->getValueAPF());
   }
   else {
-    // FIXME check reg
+    OS << "t_";
+    V->printAsOperand(OS, false);
   }
 }
 
@@ -213,17 +223,34 @@ void IR2SPD::translateOpcode(raw_ostream &OS, unsigned Opcode) const {
   OS << " ";
 }
 
+void IR2SPD::emitNodeExpr(raw_ostream &OS) {
+    OS << "EQU Node" << NodeCount << ",\t\t";
+    NodeCount++;
+}
+
 void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr,
                                   IntParamTy &IntParams, FPParamTy &FPParams) {
   if (Instr.isBinaryOp()) {
-    OS << "EQU Node" << NodeCount << ",\t\t";
-    NodeCount++;
+    emitNodeExpr(OS);
     translateValue(OS, dyn_cast<Value>(&Instr), IntParams, FPParams);
     OS << " = ";
     translateValue(OS, Instr.getOperand(0), IntParams, FPParams);
     translateOpcode(OS, Instr.getOpcode());
     translateValue(OS, Instr.getOperand(1), IntParams, FPParams);
     OS << ";\n";
+  }
+  else {
+    switch (Instr.getOpcode()) {
+    case Instruction::Ret:
+      if (Instr.getNumOperands()) {
+        emitNodeExpr(OS);
+        OS << "o_out = ";
+        translateValue(OS, Instr.getOperand(0), IntParams, FPParams);
+      }
+      break;
+    default:
+      llvm_unreachable("not supported instruction");
+    }
   }
 }
 
