@@ -1,5 +1,5 @@
 int simple(int a, int b, int c, int d, int e) {
-  return a + b + c + d + e;
+  return (a + b + c + d + e )* 100;
 }
 
 int redundant(int a, int b, int c) {

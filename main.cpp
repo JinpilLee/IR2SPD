@@ -1,23 +1,17 @@
 #include "llvm/Pass.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APFloat.h"
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/LoopIterator.h"
-#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
-#include <vector>
 #include <iostream>
 
 using namespace llvm;
-
-typedef std::vector<const APInt *> IntParamTy;
-typedef std::vector<const APFloat *> FPParamTy;
 
 class IR2SPD : public FunctionPass {
 public:
@@ -32,104 +26,43 @@ public:
 private:
   unsigned NodeCount;
 
-  int findIntParam(IntParamTy &IntParams, const APInt &IntValue) const {
-    int Idx = 0;
-    for (auto P : IntParams) {
-      if (*P == IntValue) {
-        return Idx;
-      }
+  void translateFuncDecl(raw_ostream &OS, Function &F) const;
 
-      Idx++;
-    }
+  void translateConstantInt(raw_ostream &OS, ConstantInt *CI) const;
+  void translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const;
+  void translateValue(raw_ostream &OS, Value *V) const;
 
-    return -1;
-  }
-
-  int findFPParam(FPParamTy &FPParams, const APFloat &FPValue) const {
-    int Idx = 0;
-    for (auto P : FPParams) {
-      if (FPValue.bitwiseIsEqual(*P)) {
-        return Idx;
-      }
-    }
-
-    return -1;
-  }
-
-  void collectConstantParams(IntParamTy &IntParams, FPParamTy &FPParams,
-                             Function &F) const;
-  void emitConstantParams(raw_ostream &OS,
-                          IntParamTy &IntParams, FPParamTy &FPParams) const;
-  void translateValue(raw_ostream &OS, Value *V,
-                      IntParamTy &IntParams, FPParamTy &FPParams) const;
   void translateOpcode(raw_ostream &OS, unsigned Opcode) const;
   void emitNodeExpr(raw_ostream &OS);
-  void translateInstruction(raw_ostream &OS, Instruction &Instr,
-                            IntParamTy &IntParams, FPParamTy &FPParams);
+  void translateInstruction(raw_ostream &OS, Instruction &Instr);
 };
 
 bool IR2SPD::runOnFunction(Function &F) {
+  // FIXME temporary impl
   NodeCount = 0;
 
   std::string OutputFileName = F.getName().str() + ".spd";
   std::error_code EC;
   raw_fd_ostream OS(OutputFileName, EC, sys::fs::F_None);
   if (EC) {
-    std::cerr << "error";
+    std::cerr << "cannot create a output file";
     return false;
   }
 
-  OS << "##### Module: " << F.getName().str() << "\n";
+  OS << "// Module: " << F.getName().str() << "\n";
+  translateFuncDecl(OS, F);
 
-  // print name
-  OS << "Name\t\t\t" << F.getName().str() << ";\n";
-
-  // print input ports
-  FunctionType *FT = F.getFunctionType();
-  unsigned NumParams = FT->getNumParams();
-  if (NumParams != 0) {
-    OS << "Main_In\t\t\t{main_i::";
-    unsigned Idx = 0;
-    for (const Argument &A : F.args()) {
-      if (Idx != 0) OS << ",";
-      Idx++;
-      OS << "i_" << A.getName().str();
-    }
-    OS << "};\n";
-  }
-
-  // print output port
-  Type *RetTy = F.getReturnType();
-  switch (RetTy->getTypeID()) {
-  case Type::VoidTyID:
-    break;
-  case Type::IntegerTyID:
-  case Type::FloatTyID:
-  case Type::DoubleTyID:
-    OS << "Main_Out\t\t{main_o::O_ret};\n";
-    break;
-  default:
-    llvm_unreachable("wrong return type");
-  }
-
-  // collect param
-  IntParamTy IntParams;
-  FPParamTy FPParams;
-  collectConstantParams(IntParams, FPParams, F);
-
-  // print param
-  OS << "##### Parameters\n";
-  emitConstantParams(OS, IntParams, FPParams);
-
-  // print statement
-  OS << "##### Statements\n";
+  OS << "\n// equation\n";
   for (BasicBlock &IBB : F) {
     for (BasicBlock::iterator IIB = IBB.begin(), IIE = IBB.end(); IIB != IIE;
          ++IIB) {
       Instruction &Instr = *IIB;
-      translateInstruction(OS, Instr, IntParams, FPParams);
+      translateInstruction(OS, Instr);
     }
   }
+
+  OS << "\n// direct connection\n";
+  OS << "DRCT      (Mo::sop, Mo::eop) = (Mi::sop, Mi::eop);\n";
 
   return false;
 }
@@ -138,65 +71,118 @@ void IR2SPD::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
 }
 
-void IR2SPD::collectConstantParams(IntParamTy &IntParams, FPParamTy &FPParams,
-                                   Function &F) const {
-  for (BasicBlock &IBB : F) {
-    for (BasicBlock::iterator IIB = IBB.begin(), IIE = IBB.end(); IIB != IIE;
-         ++IIB) {
-      Instruction &Instr = *IIB;
-      for (unsigned i = 0, e = Instr.getNumOperands(); i != e; ++i) {
-        Value *V = Instr.getOperand(i);
-        if (isa<ConstantInt>(V)) {
-          const APInt &IntValue = dyn_cast<ConstantInt>(V)->getValue();
-          if (findIntParam(IntParams, IntValue) == -1) {
-            IntParams.push_back(&IntValue);
-          }
-        }
-        else if (isa<ConstantFP>(V)) {
-          const APFloat &FPValue = dyn_cast<ConstantFP>(V)->getValueAPF();
-          if (findFPParam(FPParams, FPValue) == -1) {
-            FPParams.push_back(&FPValue);
-          }
+void IR2SPD::translateFuncDecl(raw_ostream &OS, Function &F) const {
+  OS << "Name      " << F.getName().str() << ";\n";
+
+  OS << "Main_In   {Mi::";
+  for (const Argument &A : F.args()) {
+    OS << "i_" << A.getName().str() << ", ";
+  }
+  OS << "sop, eop};\n";
+
+  OS << "Main_Out  {Mo::";
+  Type *RetTy = F.getReturnType();
+  switch (RetTy->getTypeID()) {
+  case Type::VoidTyID:
+    break;
+  case Type::IntegerTyID:
+  case Type::FloatTyID:
+  case Type::DoubleTyID:
+    OS << "o_ret, ";
+    break;
+  default:
+    llvm_unreachable("unsupported return type");
+  }
+  OS << "sop, eop};\n";
+}
+
+// copied from WriteConstantInternal()@IR/AsmPrinter.cpp
+void IR2SPD::translateConstantInt(raw_ostream &OS, ConstantInt *CI) const {
+  if (CI->getType()->isIntegerTy(1)) {
+    OS << (CI->getZExtValue() ? "true" : "false");
+  }
+  else {
+    OS << CI->getValue();
+  }
+}
+
+// copied from WriteConstantInternal()@IR/AsmPrinter.cpp
+void IR2SPD::translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const {
+  if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEsingle() ||
+      &CFP->getValueAPF().getSemantics() == &APFloat::IEEEdouble()) {
+    bool ignored;
+    bool isDouble = &CFP->getValueAPF().getSemantics()==&APFloat::IEEEdouble();
+    bool isInf = CFP->getValueAPF().isInfinity();
+    bool isNaN = CFP->getValueAPF().isNaN();
+    if (!isInf && !isNaN) {
+      double Val = isDouble ? CFP->getValueAPF().convertToDouble() :
+                              CFP->getValueAPF().convertToFloat();
+      SmallString<128> StrVal;
+      raw_svector_ostream(StrVal) << Val;
+
+      if ((StrVal[0] >= '0' && StrVal[0] <= '9') ||
+          ((StrVal[0] == '-' || StrVal[0] == '+') &&
+           (StrVal[1] >= '0' && StrVal[1] <= '9'))) {
+        if (APFloat(APFloat::IEEEdouble(), StrVal).convertToDouble() == Val) {
+          OS << StrVal;
+          return;
         }
       }
     }
+    static_assert(sizeof(double) == sizeof(uint64_t),
+                  "assuming that double is 64 bits!");
+    APFloat apf = CFP->getValueAPF();
+    if (!isDouble)
+      apf.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven,
+                        &ignored);
+    OS << format_hex(apf.bitcastToAPInt().getZExtValue(), 0, /*Upper=*/true);
+    return;
+  }
+
+  OS << "0x";
+  APInt API = CFP->getValueAPF().bitcastToAPInt();
+  if (&CFP->getValueAPF().getSemantics() == &APFloat::x87DoubleExtended()) {
+    OS << 'K';
+    OS << format_hex_no_prefix(API.getHiBits(16).getZExtValue(), 4,
+                               /*Upper=*/true);
+    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
+                               /*Upper=*/true);
+  }
+  else if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEquad()) {
+    OS << 'L';
+    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
+                               /*Upper=*/true);
+    OS << format_hex_no_prefix(API.getHiBits(64).getZExtValue(), 16,
+                               /*Upper=*/true);
+  }
+  else if (&CFP->getValueAPF().getSemantics() == &APFloat::PPCDoubleDouble()) {
+    OS << 'M';
+    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
+                               /*Upper=*/true);
+    OS << format_hex_no_prefix(API.getHiBits(64).getZExtValue(), 16,
+                               /*Upper=*/true);
+  }
+  else if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEhalf()) {
+    OS << 'H';
+    OS << format_hex_no_prefix(API.getZExtValue(), 4,
+                               /*Upper=*/true);
+  }
+  else {
+    llvm_unreachable("unsupported floating point type");
   }
 }
 
-void IR2SPD::emitConstantParams(raw_ostream &OS,
-                                IntParamTy &IntParams,
-                                FPParamTy &FPParams) const {
-  int count = 0;
-  for (auto P : IntParams) {
-    OS << "Param\t\t\tci_" << count << " = ";
-    // FIXME signed?
-    P->print(OS, true);
-    OS << ";\n";
-    count++;
-  }
-
-  count = 0;
-  for (auto P : FPParams) {
-    OS << "Param\t\t\tcf_" << count << " = ";
-    P->print(OS);
-// FIXME APFloat::print() adds newline
-//    OS << ";\n";
-    count++;
-  }
-}
-
-void IR2SPD::translateValue(raw_ostream &OS, Value *V,
-                            IntParamTy &IntParams, FPParamTy &FPParams) const {
+void IR2SPD::translateValue(raw_ostream &OS, Value *V) const {
   if (isa<ConstantInt>(V)) {
-    OS << "ci_" << findIntParam(IntParams,
-                                dyn_cast<ConstantInt>(V)->getValue());
+    translateConstantInt(OS, dyn_cast<ConstantInt>(V));
   }
   else if (isa<ConstantFP>(V)) {
-    OS << "cf_" << findFPParam(FPParams,
-                               dyn_cast<ConstantFP>(V)->getValueAPF());
+    translateConstantFP(OS, dyn_cast<ConstantFP>(V));
   }
   else {
     OS << "t_";
+    // FIXME how to remove prefix (%, @)?
+    // store output to temporary buffer -> remove
     V->printAsOperand(OS, false);
   }
 }
@@ -218,25 +204,24 @@ void IR2SPD::translateOpcode(raw_ostream &OS, unsigned Opcode) const {
   case Instruction::FDiv:
     OS << "/"; break;
   default:
-    llvm_unreachable("wrong opcode");
+    llvm_unreachable("unsupported opcode");
   }
   OS << " ";
 }
 
 void IR2SPD::emitNodeExpr(raw_ostream &OS) {
-    OS << "EQU Node" << NodeCount << ",\t\t";
+    OS << "EQU       equ" << NodeCount << ", ";
     NodeCount++;
 }
 
-void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr,
-                                  IntParamTy &IntParams, FPParamTy &FPParams) {
+void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
   if (Instr.isBinaryOp()) {
     emitNodeExpr(OS);
-    translateValue(OS, dyn_cast<Value>(&Instr), IntParams, FPParams);
+    translateValue(OS, dyn_cast<Value>(&Instr));
     OS << " = ";
-    translateValue(OS, Instr.getOperand(0), IntParams, FPParams);
+    translateValue(OS, Instr.getOperand(0));
     translateOpcode(OS, Instr.getOpcode());
-    translateValue(OS, Instr.getOperand(1), IntParams, FPParams);
+    translateValue(OS, Instr.getOperand(1));
     OS << ";\n";
   }
   else {
@@ -244,12 +229,13 @@ void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr,
     case Instruction::Ret:
       if (Instr.getNumOperands()) {
         emitNodeExpr(OS);
-        OS << "o_out = ";
-        translateValue(OS, Instr.getOperand(0), IntParams, FPParams);
+        OS << "o_ret = ";
+        translateValue(OS, Instr.getOperand(0));
+        OS << ";\n";
       }
       break;
     default:
-      llvm_unreachable("not supported instruction");
+      llvm_unreachable("unsupported instruction");
     }
   }
 }
