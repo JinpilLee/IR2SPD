@@ -10,36 +10,43 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <iostream>
+#include <map>
 
 using namespace llvm;
+
+typedef std::map<Value *, unsigned> ValueNumMapTy;
 
 class IR2SPD : public FunctionPass {
 public:
   static char ID;
 
-  IR2SPD() : FunctionPass(ID), NodeCount(0) {
+  IR2SPD() : FunctionPass(ID), EquCount(0), ValueCount(0) {
   }
 
   virtual bool runOnFunction(Function &F);
   virtual void getAnalysisUsage(AnalysisUsage &AU) const;
 
 private:
-  unsigned NodeCount;
+  // FIXME temporary impl
+  // reset these counter per Function or Module?
+  unsigned EquCount;
+  unsigned ValueCount;
+  ValueNumMapTy ValueNumMap;
 
   void translateFuncDecl(raw_ostream &OS, Function &F) const;
 
   void translateConstantInt(raw_ostream &OS, ConstantInt *CI) const;
   void translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const;
-  void translateValue(raw_ostream &OS, Value *V) const;
+  unsigned getValueNum(Value *V);
+  void translateValue(raw_ostream &OS, Value *V);
 
   void translateOpcode(raw_ostream &OS, unsigned Opcode) const;
-  void emitNodeExpr(raw_ostream &OS);
+  void emitEquPrefix(raw_ostream &OS);
   void translateInstruction(raw_ostream &OS, Instruction &Instr);
 };
 
 bool IR2SPD::runOnFunction(Function &F) {
-  // FIXME temporary impl
-  NodeCount = 0;
+  EquCount = 0;
 
   std::string OutputFileName = F.getName().str() + ".spd";
   std::error_code EC;
@@ -49,7 +56,7 @@ bool IR2SPD::runOnFunction(Function &F) {
     return false;
   }
 
-  OS << "// Module: " << F.getName().str() << "\n";
+  OS << "// Module " << F.getName().str() << "\n";
   translateFuncDecl(OS, F);
 
   OS << "\n// equation\n";
@@ -172,7 +179,19 @@ void IR2SPD::translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const {
   }
 }
 
-void IR2SPD::translateValue(raw_ostream &OS, Value *V) const {
+unsigned IR2SPD::getValueNum(Value *V) {
+  ValueNumMapTy::iterator Iter = ValueNumMap.find(V);
+  if (Iter == ValueNumMap.end()) {
+    unsigned RetVal = ValueNumMap[V] = ValueCount;
+    ValueCount++;
+    return RetVal;
+  }
+  else {
+    return Iter->second;
+  }
+}
+
+void IR2SPD::translateValue(raw_ostream &OS, Value *V) {
   if (isa<ConstantInt>(V)) {
     translateConstantInt(OS, dyn_cast<ConstantInt>(V));
   }
@@ -181,9 +200,12 @@ void IR2SPD::translateValue(raw_ostream &OS, Value *V) const {
   }
   else {
     OS << "t_";
-    // FIXME how to remove prefix (%, @)?
-    // store output to temporary buffer -> remove
-    V->printAsOperand(OS, false);
+    if (V->hasName()) {
+      OS << V->getName().str();
+    }
+    else {
+      OS << getValueNum(V);
+    }
   }
 }
 
@@ -209,14 +231,14 @@ void IR2SPD::translateOpcode(raw_ostream &OS, unsigned Opcode) const {
   OS << " ";
 }
 
-void IR2SPD::emitNodeExpr(raw_ostream &OS) {
-    OS << "EQU       equ" << NodeCount << ", ";
-    NodeCount++;
+void IR2SPD::emitEquPrefix(raw_ostream &OS) {
+    OS << "EQU       equ" << EquCount << ", ";
+    EquCount++;
 }
 
 void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
   if (Instr.isBinaryOp()) {
-    emitNodeExpr(OS);
+    emitEquPrefix(OS);
     translateValue(OS, dyn_cast<Value>(&Instr));
     OS << " = ";
     translateValue(OS, Instr.getOperand(0));
@@ -228,7 +250,7 @@ void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
     switch (Instr.getOpcode()) {
     case Instruction::Ret:
       if (Instr.getNumOperands()) {
-        emitNodeExpr(OS);
+        emitEquPrefix(OS);
         OS << "o_ret = ";
         translateValue(OS, Instr.getOperand(0));
         OS << ";\n";
