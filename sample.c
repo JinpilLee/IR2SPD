@@ -24,3 +24,9 @@ float useparam(float tmp) {
   tmp2 = tmp2 / 10;
   return tmp2 * 30;
 }
+
+extern int myfunc(int x);
+
+int use_func(int n) {
+  return myfunc(n) * (n - 1);
+}
