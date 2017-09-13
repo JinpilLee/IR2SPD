@@ -25,8 +25,14 @@ float useparam(float tmp) {
   return tmp2 * 30;
 }
 
-extern int myfunc(int x);
+#if 0
+int myfunc(int x) {
+  return x + x * x;
+}
+#else
+extern int myfunc(int x, int y);
+#endif
 
 int use_func(int n) {
-  return myfunc(n) * (n - 1);
+  return myfunc(n, 123) * (n - 1);
 }

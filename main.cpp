@@ -69,7 +69,8 @@ bool IR2SPD::runOnFunction(Function &F) {
   }
 
   OS << "\n// direct connection\n";
-  OS << "DRCT      (Mo::sop, Mo::eop) = (Mi::sop, Mi::eop);\n";
+  OS << "DRCT      (Mo::__SPG_sop, Mo::__SPG_eop)";
+  OS <<        " = (Mi::__SPG_sop, Mi::__SPG_eop);\n";
 
   return false;
 }
@@ -83,9 +84,9 @@ void IR2SPD::translateFuncDecl(raw_ostream &OS, Function &F) const {
 
   OS << "Main_In   {Mi::";
   for (const Argument &A : F.args()) {
-    OS << "i_" << A.getName().str() << ", ";
+    OS << A.getName().str() << ", ";
   }
-  OS << "sop, eop};\n";
+  OS << "__SPG_sop, __SPG_eop};\n";
 
   OS << "Main_Out  {Mo::";
   Type *RetTy = F.getReturnType();
@@ -95,12 +96,12 @@ void IR2SPD::translateFuncDecl(raw_ostream &OS, Function &F) const {
   case Type::IntegerTyID:
   case Type::FloatTyID:
   case Type::DoubleTyID:
-    OS << "o_ret, ";
+    OS << "__SPG_ret, ";
     break;
   default:
     llvm_unreachable("unsupported return type");
   }
-  OS << "sop, eop};\n";
+  OS << "__SPG_sop, __SPG_eop};\n";
 }
 
 // copied from WriteConstantInternal()@IR/AsmPrinter.cpp
@@ -199,7 +200,6 @@ void IR2SPD::translateValue(raw_ostream &OS, Value *V) {
     translateConstantFP(OS, dyn_cast<ConstantFP>(V));
   }
   else {
-    OS << "t_";
     if (V->hasName()) {
       OS << V->getName().str();
     }
@@ -237,6 +237,7 @@ void IR2SPD::emitEquPrefix(raw_ostream &OS) {
 }
 
 void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
+  unsigned NumOperands = Instr.getNumOperands();
   if (Instr.isBinaryOp()) {
     emitEquPrefix(OS);
     translateValue(OS, dyn_cast<Value>(&Instr));
@@ -248,10 +249,22 @@ void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
   }
   else {
     switch (Instr.getOpcode()) {
+    case Instruction::Call:
+      emitEquPrefix(OS);
+      translateValue(OS, dyn_cast<Value>(&Instr));
+      OS << " = ";
+      OS << Instr.getOperand(NumOperands - 1)->getName().str();
+      OS << "(";
+      for (unsigned i = 0; i < (NumOperands - 1); i++) {
+        if (i != 0) OS << ", ";
+        translateValue(OS, Instr.getOperand(i));
+      }
+      OS << ")\n";
+      break;
     case Instruction::Ret:
-      if (Instr.getNumOperands()) {
+      if (NumOperands) {
         emitEquPrefix(OS);
-        OS << "o_ret = ";
+        OS << "__SPG_ret = ";
         translateValue(OS, Instr.getOperand(0));
         OS << ";\n";
       }

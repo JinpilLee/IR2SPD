@@ -18,7 +18,7 @@ CallGraphTest.so: CallGraphTest.cpp
 	@echo build done
 
 src: sample.c
-	clang -cc1 -std=c99 -O3 -S -emit-llvm sample.c -o sample.ll
+	clang -cc1 -std=c99 -O3 -fno-inline -S -emit-llvm sample.c -o sample.ll
 
 try: src IR2SPD.so
 	opt -load ./IR2SPD.so -generate-spd sample.ll -S > /dev/null
