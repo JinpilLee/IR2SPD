@@ -1,278 +1,41 @@
 #include "llvm/Pass.h"
-#include "llvm/ADT/APInt.h"
-#include "llvm/ADT/APFloat.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Instruction.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "SPDPrinter.h"
 
 #include <iostream>
-#include <map>
 
 using namespace llvm;
-
-typedef std::map<Value *, unsigned> ValueNumMapTy;
 
 class IR2SPD : public FunctionPass {
 public:
   static char ID;
 
-  IR2SPD() : FunctionPass(ID), EquCount(0), ValueCount(0) {
+  IR2SPD() : FunctionPass(ID) {
   }
 
-  virtual bool runOnFunction(Function &F);
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
-
-private:
-  // FIXME temporary impl
-  // reset these counter per Function or Module?
-  unsigned EquCount;
-  unsigned ValueCount;
-  ValueNumMapTy ValueNumMap;
-
-  void translateFuncDecl(raw_ostream &OS, Function &F) const;
-
-  void translateConstantInt(raw_ostream &OS, ConstantInt *CI) const;
-  void translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const;
-  unsigned getValueNum(Value *V);
-  void translateValue(raw_ostream &OS, Value *V);
-
-  void translateOpcode(raw_ostream &OS, unsigned Opcode) const;
-  void emitEquPrefix(raw_ostream &OS);
-  void translateInstruction(raw_ostream &OS, Instruction &Instr);
+  virtual bool runOnFunction(Function &F) override;
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const override;
 };
 
 bool IR2SPD::runOnFunction(Function &F) {
-  EquCount = 0;
-
-  std::string OutputFileName = F.getName().str() + ".spd";
-  std::error_code EC;
-  raw_fd_ostream OS(OutputFileName, EC, sys::fs::F_None);
-  if (EC) {
-    std::cerr << "cannot create a output file";
-    return false;
-  }
-
-  OS << "// Module " << F.getName().str() << "\n";
-  translateFuncDecl(OS, F);
-
-  OS << "\n// equation\n";
-  for (BasicBlock &IBB : F) {
-    for (BasicBlock::iterator IIB = IBB.begin(), IIE = IBB.end(); IIB != IIE;
-         ++IIB) {
-      Instruction &Instr = *IIB;
-      translateInstruction(OS, Instr);
+  std::string FunctionName = F.getName().str();
+  if (FunctionName.compare("fpga_main") == 0) {
+    std::error_code EC;
+    raw_fd_ostream OS(FunctionName + ".spd", EC, sys::fs::F_None);
+    if (EC) {
+      std::cerr << "cannot create a output file";
+      return false;
     }
-  }
 
-  OS << "\n// direct connection\n";
-  OS << "DRCT      (Mo::__SPG_sop, Mo::__SPG_eop)";
-  OS <<        " = (Mi::__SPG_sop, Mi::__SPG_eop);\n";
+    emitFunctionSPD(OS, F);
+  }
 
   return false;
 }
 
 void IR2SPD::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
-}
-
-void IR2SPD::translateFuncDecl(raw_ostream &OS, Function &F) const {
-  OS << "Name      " << F.getName().str() << ";\n";
-
-  OS << "Main_In   {Mi::";
-  for (const Argument &A : F.args()) {
-    OS << A.getName().str() << ", ";
-  }
-  OS << "__SPG_sop, __SPG_eop};\n";
-
-  OS << "Main_Out  {Mo::";
-  Type *RetTy = F.getReturnType();
-  switch (RetTy->getTypeID()) {
-  case Type::VoidTyID:
-    break;
-  case Type::IntegerTyID:
-  case Type::FloatTyID:
-  case Type::DoubleTyID:
-    OS << "__SPG_ret, ";
-    break;
-  default:
-    llvm_unreachable("unsupported return type");
-  }
-  OS << "__SPG_sop, __SPG_eop};\n";
-}
-
-// copied from WriteConstantInternal()@IR/AsmPrinter.cpp
-void IR2SPD::translateConstantInt(raw_ostream &OS, ConstantInt *CI) const {
-  if (CI->getType()->isIntegerTy(1)) {
-    OS << (CI->getZExtValue() ? "true" : "false");
-  }
-  else {
-    OS << CI->getValue();
-  }
-}
-
-// copied from WriteConstantInternal()@IR/AsmPrinter.cpp
-void IR2SPD::translateConstantFP(raw_ostream &OS, ConstantFP *CFP) const {
-  if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEsingle() ||
-      &CFP->getValueAPF().getSemantics() == &APFloat::IEEEdouble()) {
-    bool ignored;
-    bool isDouble = &CFP->getValueAPF().getSemantics()==&APFloat::IEEEdouble();
-    bool isInf = CFP->getValueAPF().isInfinity();
-    bool isNaN = CFP->getValueAPF().isNaN();
-    if (!isInf && !isNaN) {
-      double Val = isDouble ? CFP->getValueAPF().convertToDouble() :
-                              CFP->getValueAPF().convertToFloat();
-      SmallString<128> StrVal;
-      raw_svector_ostream(StrVal) << Val;
-
-      if ((StrVal[0] >= '0' && StrVal[0] <= '9') ||
-          ((StrVal[0] == '-' || StrVal[0] == '+') &&
-           (StrVal[1] >= '0' && StrVal[1] <= '9'))) {
-        if (APFloat(APFloat::IEEEdouble(), StrVal).convertToDouble() == Val) {
-          OS << StrVal;
-          return;
-        }
-      }
-    }
-    static_assert(sizeof(double) == sizeof(uint64_t),
-                  "assuming that double is 64 bits!");
-    APFloat apf = CFP->getValueAPF();
-    if (!isDouble)
-      apf.convert(APFloat::IEEEdouble(), APFloat::rmNearestTiesToEven,
-                        &ignored);
-    OS << format_hex(apf.bitcastToAPInt().getZExtValue(), 0, /*Upper=*/true);
-    return;
-  }
-
-  OS << "0x";
-  APInt API = CFP->getValueAPF().bitcastToAPInt();
-  if (&CFP->getValueAPF().getSemantics() == &APFloat::x87DoubleExtended()) {
-    OS << 'K';
-    OS << format_hex_no_prefix(API.getHiBits(16).getZExtValue(), 4,
-                               /*Upper=*/true);
-    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
-                               /*Upper=*/true);
-  }
-  else if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEquad()) {
-    OS << 'L';
-    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
-                               /*Upper=*/true);
-    OS << format_hex_no_prefix(API.getHiBits(64).getZExtValue(), 16,
-                               /*Upper=*/true);
-  }
-  else if (&CFP->getValueAPF().getSemantics() == &APFloat::PPCDoubleDouble()) {
-    OS << 'M';
-    OS << format_hex_no_prefix(API.getLoBits(64).getZExtValue(), 16,
-                               /*Upper=*/true);
-    OS << format_hex_no_prefix(API.getHiBits(64).getZExtValue(), 16,
-                               /*Upper=*/true);
-  }
-  else if (&CFP->getValueAPF().getSemantics() == &APFloat::IEEEhalf()) {
-    OS << 'H';
-    OS << format_hex_no_prefix(API.getZExtValue(), 4,
-                               /*Upper=*/true);
-  }
-  else {
-    llvm_unreachable("unsupported floating point type");
-  }
-}
-
-unsigned IR2SPD::getValueNum(Value *V) {
-  ValueNumMapTy::iterator Iter = ValueNumMap.find(V);
-  if (Iter == ValueNumMap.end()) {
-    unsigned RetVal = ValueNumMap[V] = ValueCount;
-    ValueCount++;
-    return RetVal;
-  }
-  else {
-    return Iter->second;
-  }
-}
-
-void IR2SPD::translateValue(raw_ostream &OS, Value *V) {
-  if (isa<ConstantInt>(V)) {
-    translateConstantInt(OS, dyn_cast<ConstantInt>(V));
-  }
-  else if (isa<ConstantFP>(V)) {
-    translateConstantFP(OS, dyn_cast<ConstantFP>(V));
-  }
-  else {
-    if (V->hasName()) {
-      OS << V->getName().str();
-    }
-    else {
-      OS << getValueNum(V);
-    }
-  }
-}
-
-void IR2SPD::translateOpcode(raw_ostream &OS, unsigned Opcode) const {
-  OS << " ";
-  switch (Opcode) {
-  case Instruction::Add:
-  case Instruction::FAdd:
-    OS << "+"; break;
-  case Instruction::Sub:
-  case Instruction::FSub:
-    OS << "-"; break;
-  case Instruction::Mul:
-  case Instruction::FMul:
-    OS << "*"; break;
-  case Instruction::UDiv:
-  case Instruction::SDiv:
-  case Instruction::FDiv:
-    OS << "/"; break;
-  default:
-    llvm_unreachable("unsupported opcode");
-  }
-  OS << " ";
-}
-
-void IR2SPD::emitEquPrefix(raw_ostream &OS) {
-    OS << "EQU       equ" << EquCount << ", ";
-    EquCount++;
-}
-
-void IR2SPD::translateInstruction(raw_ostream &OS, Instruction &Instr) {
-  unsigned NumOperands = Instr.getNumOperands();
-  if (Instr.isBinaryOp()) {
-    emitEquPrefix(OS);
-    translateValue(OS, dyn_cast<Value>(&Instr));
-    OS << " = ";
-    translateValue(OS, Instr.getOperand(0));
-    translateOpcode(OS, Instr.getOpcode());
-    translateValue(OS, Instr.getOperand(1));
-    OS << ";\n";
-  }
-  else {
-    switch (Instr.getOpcode()) {
-    case Instruction::Call:
-      emitEquPrefix(OS);
-      translateValue(OS, dyn_cast<Value>(&Instr));
-      OS << " = ";
-      OS << Instr.getOperand(NumOperands - 1)->getName().str();
-      OS << "(";
-      for (unsigned i = 0; i < (NumOperands - 1); i++) {
-        if (i != 0) OS << ", ";
-        translateValue(OS, Instr.getOperand(i));
-      }
-      OS << ")\n";
-      break;
-    case Instruction::Ret:
-      if (NumOperands) {
-        emitEquPrefix(OS);
-        OS << "__SPG_ret = ";
-        translateValue(OS, Instr.getOperand(0));
-        OS << ";\n";
-      }
-      break;
-    default:
-      llvm_unreachable("unsupported instruction");
-    }
-  }
 }
 
 char IR2SPD::ID = 0;

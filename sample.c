@@ -1,3 +1,4 @@
+/*
 int simple(int a, int b, int c, int d, int e) {
   return (a + b + c + d + e )* 100;
 }
@@ -24,15 +25,20 @@ float useparam(float tmp) {
   tmp2 = tmp2 / 10;
   return tmp2 * 30;
 }
+*/
 
-#if 0
-int myfunc(int x) {
-  return x + x * x;
+float add(float x, float y) {
+  return x + y;
 }
-#else
-extern int myfunc(int x, int y);
-#endif
 
-int use_func(int n) {
-  return myfunc(n, 123) * (n - 1);
+float mult(float x, float y) {
+  return x * y;
+}
+
+float ex2(float x) {
+  return mult(x, x);
+}
+
+float fpga_main(float a, float b) {
+  return add(ex2(a), ex2(b));
 }

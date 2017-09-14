@@ -1,7 +1,5 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <iostream>
 
@@ -16,26 +14,41 @@ public:
 
   virtual bool runOnSCC(CallGraphSCC &SCC) override;
   virtual void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+private:
+  void showCalledFunctionRec(CallGraphNode *N);
 };
 
 bool CallGraphTest::runOnSCC(CallGraphSCC &SCC) {
+  std::cerr << "NEW SCC\n";
   for (CallGraphNode *Node : SCC) {
     Function *F = Node->getFunction();
     if (!F) continue;
 
-    std::string OutputFileName = F->getName().str() + ".cg";
-    std::error_code EC;
-    raw_fd_ostream OS(OutputFileName, EC, sys::fs::F_None);
-    if (EC) {
-      std::cerr << "cannot create a output file";
-      return false;
+    std::string FunctionName = F->getName().str();
+    std::cerr << "Call Graph Node for Function: " << FunctionName << "\n";
+    if (FunctionName.compare("fpga_main") == 0) {
+      showCalledFunctionRec(Node);
     }
-
-    OS << "Call Graph for Function: " << F->getName().str() << "\n";
-    Node->print(OS);
   }
 
   return false;
+}
+
+void CallGraphTest::showCalledFunctionRec(CallGraphNode *N) {
+  std::string FuncName = N->getFunction()->getName().str();
+  for (const auto &I : *N) {
+    CallGraphNode *CalledFuncNode = I.second;
+    Function *CalledFunc = CalledFuncNode->getFunction();
+    if (CalledFunc) {
+      std::cerr << FuncName
+        << " calls function: " << CalledFunc->getName().str() << "\n";
+      showCalledFunctionRec(CalledFuncNode);
+    }
+    else {
+      std::cerr << FuncName << " calls external node\n";
+    }
+  }
 }
 
 void CallGraphTest::getAnalysisUsage(AnalysisUsage &AU) const {
