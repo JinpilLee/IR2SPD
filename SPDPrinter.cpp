@@ -3,9 +3,11 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "SPDPrinter.h"
 
 #include <iostream>
 #include <map>
@@ -14,7 +16,8 @@ using namespace llvm;
 
 typedef std::map<Value *, unsigned> ValueNumMapTy;
 
-static unsigned EquCount;
+static unsigned EQUCount;
+static unsigned HDLCount;
 unsigned ValueCount;
 ValueNumMapTy ValueNumMap;
 
@@ -170,15 +173,22 @@ static void emitOpcode(raw_ostream &OS, unsigned Opcode) {
   OS << " ";
 }
 
-static void emitEquPrefix(raw_ostream &OS) {
-    OS << "EQU       equ" << EquCount << ", ";
-    EquCount++;
+static void emitEQUPrefix(raw_ostream &OS) {
+    OS << "EQU       equ" << EQUCount << ", ";
+    EQUCount++;
 }
 
-static void emitInstruction(raw_ostream &OS, Instruction &Instr) {
+static void emitHDLPrefix(raw_ostream &OS, unsigned Delay) {
+    OS << "HDL       hdl" << HDLCount << ", ";
+    OS << Delay << ", ";
+    HDLCount++;
+}
+
+static void emitInstruction(raw_ostream &OS, Instruction &Instr,
+                            SPDModuleMapTy &SPDModuleMap) {
   unsigned NumOperands = Instr.getNumOperands();
   if (Instr.isBinaryOp()) {
-    emitEquPrefix(OS);
+    emitEQUPrefix(OS);
     emitValue(OS, dyn_cast<Value>(&Instr));
     OS << " = ";
     emitValue(OS, Instr.getOperand(0));
@@ -189,20 +199,29 @@ static void emitInstruction(raw_ostream &OS, Instruction &Instr) {
   else {
     switch (Instr.getOpcode()) {
     case Instruction::Call:
-      emitEquPrefix(OS);
+{
+      std::string FuncName
+        = Instr.getOperand(NumOperands - 1)->getName().str();
+      SPDModuleMapTy::iterator Iter = SPDModuleMap.find(FuncName);
+      if (Iter == SPDModuleMap.end()) {
+        llvm_unreachable("failed to generate HDL statement");
+      }
+
+      emitHDLPrefix(OS, Iter->second);
       emitValue(OS, dyn_cast<Value>(&Instr));
       OS << " = ";
-      OS << Instr.getOperand(NumOperands - 1)->getName().str();
+      OS << FuncName;
       OS << "(";
       for (unsigned i = 0; i < (NumOperands - 1); i++) {
         if (i != 0) OS << ", ";
         emitValue(OS, Instr.getOperand(i));
       }
       OS << ")\n";
+}
       break;
     case Instruction::Ret:
       if (NumOperands) {
-        emitEquPrefix(OS);
+        emitEQUPrefix(OS);
         OS << "__SPD_ret = ";
         emitValue(OS, Instr.getOperand(0));
         OS << ";\n";
@@ -214,12 +233,20 @@ static void emitInstruction(raw_ostream &OS, Instruction &Instr) {
   }
 }
 
-void emitFunctionSPD(raw_ostream &OS, Function &F) {
-  EquCount = 0;
+void emitFunctionSPD(Function &F, SPDModuleMapTy &SPDModuleMap) {
+  std::string FuncName = F.getName().str();
+  std::error_code EC;
+  raw_fd_ostream OS(FuncName + ".spd", EC, sys::fs::F_None);
+  if (EC) {
+    std::cerr << "cannot create a output file";
+  }
+
+  EQUCount = 0;
+  HDLCount = 0;
   ValueCount = 0;
   ValueNumMap.clear();
 
-  OS << "// Module " << F.getName().str() << "\n";
+  OS << "// Module " << FuncName << "\n";
   emitFuncDecl(OS, F);
 
   OS << "\n// equation\n";
@@ -227,7 +254,7 @@ void emitFunctionSPD(raw_ostream &OS, Function &F) {
     for (BasicBlock::iterator IIB = IBB.begin(), IIE = IBB.end(); IIB != IIE;
          ++IIB) {
       Instruction &Instr = *IIB;
-      emitInstruction(OS, Instr);
+      emitInstruction(OS, Instr, SPDModuleMap);
     }
   }
 

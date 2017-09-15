@@ -1,6 +1,10 @@
 #include "llvm/IR/Function.h"
-#include "llvm/Support/raw_ostream.h"
+#include <string>
 
 using namespace llvm;
 
-void emitFunctionSPD(raw_ostream &OS, Function &F);
+// XXX std::string or Function *
+// which one is better?
+typedef std::map<std::string, unsigned> SPDModuleMapTy;
+
+void emitFunctionSPD(Function &F, SPDModuleMapTy &SPDModuleMap);

@@ -1,37 +1,91 @@
-#include "llvm/Pass.h"
-#include "llvm/IR/Function.h"
-#include "llvm/Support/FileSystem.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/CallGraphSCCPass.h"
 #include "SPDPrinter.h"
-
-#include <iostream>
 
 using namespace llvm;
 
-class IR2SPD : public FunctionPass {
+class IR2SPD : public CallGraphSCCPass {
 public:
   static char ID;
 
-  IR2SPD() : FunctionPass(ID) {
+  IR2SPD() : CallGraphSCCPass(ID) {
   }
 
-  virtual bool runOnFunction(Function &F) override;
+  virtual bool runOnSCC(CallGraphSCC &SCC) override;
   virtual void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+private:
+  SPDModuleMapTy SPDModuleMap;
+
+  unsigned calcModuleDelay(CallGraphNode *N);
+  void emitSPDRec(CallGraphNode *N);
 };
 
-bool IR2SPD::runOnFunction(Function &F) {
-  std::string FunctionName = F.getName().str();
-  if (FunctionName.compare("fpga_main") == 0) {
-    std::error_code EC;
-    raw_fd_ostream OS(FunctionName + ".spd", EC, sys::fs::F_None);
-    if (EC) {
-      std::cerr << "cannot create a output file";
-      return false;
-    }
+bool IR2SPD::runOnSCC(CallGraphSCC &SCC) {
+  for (CallGraphNode *Node : SCC) {
+    Function *F = Node->getFunction();
+    if (!F) continue;
 
-    emitFunctionSPD(OS, F);
+    std::string FunctionName = F->getName().str();
+    if (FunctionName.compare("fpga_main") == 0) {
+      emitSPDRec(Node);
+    }
   }
 
   return false;
+}
+
+// FIXME this is temporary function for test
+// the delay value should be calculated by using the SPD compiler
+unsigned IR2SPD::calcModuleDelay(CallGraphNode *N) {
+  std::string FuncName = N->getFunction()->getName().str();
+  SPDModuleMapTy::iterator Iter = SPDModuleMap.find(FuncName);
+  if (Iter != SPDModuleMap.end()) {
+    return Iter->second;
+  }
+
+  // assume that the default delay is 5
+  unsigned RetDelay = 5;
+  for (const auto &I : *N) {
+    CallGraphNode *CalledFuncNode = I.second;
+    Function *CalledFunc = CalledFuncNode->getFunction();
+    if (CalledFunc) {
+      // assume that the function call delay is 10
+      unsigned TempDelay = calcModuleDelay(CalledFuncNode) + 10;
+      if (TempDelay > RetDelay) {
+        RetDelay = TempDelay;
+      }
+    }
+  }
+
+  return RetDelay;
+}
+
+void IR2SPD::emitSPDRec(CallGraphNode *N) {
+  Function *Func = N->getFunction();
+  std::string FuncName = Func->getName().str();
+  SPDModuleMapTy::iterator Iter = SPDModuleMap.find(FuncName);
+  if (Iter != SPDModuleMap.end()) {
+    return;
+  }
+
+  for (const auto &I : *N) {
+    CallGraphNode *CalledFuncNode = I.second;
+    Function *CalledFunc = CalledFuncNode->getFunction();
+    if (CalledFunc) {
+      emitSPDRec(CalledFuncNode);
+    }
+  }
+
+  // FIXME there are two ways to calculate the delay
+  // 1. generate SPD file and invoke the compiler
+  // 2. generate in-memory SPD instance and use the compiler API
+  // current implementation assumes method 1
+  emitFunctionSPD(*Func, SPDModuleMap);
+  // FIXME invoke SPD compiler here to calculate the delay
+  // instead of using calcModuleDelay()
+  unsigned FuncDelay = calcModuleDelay(N);
+  SPDModuleMap[FuncName] = FuncDelay;
 }
 
 void IR2SPD::getAnalysisUsage(AnalysisUsage &AU) const {
@@ -39,5 +93,5 @@ void IR2SPD::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 char IR2SPD::ID = 0;
-static RegisterPass<IR2SPD> X("generate-spd", "generate SPD from LLVM IR",
+static RegisterPass<IR2SPD> X("generate-spd", "generates SPD from LLVM IR",
                               false, false);
