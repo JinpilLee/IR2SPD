@@ -17,7 +17,7 @@ public:
 private:
   SPDModuleMapTy SPDModuleMap;
 
-  unsigned calcModuleDelay(CallGraphNode *N);
+  unsigned calcModuleDelay(CallGraphNode *N) const;
   void emitSPDRec(CallGraphNode *N);
 };
 
@@ -26,8 +26,7 @@ bool IR2SPD::runOnSCC(CallGraphSCC &SCC) {
     Function *F = Node->getFunction();
     if (!F) continue;
 
-    std::string FunctionName = F->getName().str();
-    if (FunctionName.compare("fpga_main") == 0) {
+    if (isEntryFunction(*F)) {
       emitSPDRec(Node);
     }
   }
@@ -37,9 +36,9 @@ bool IR2SPD::runOnSCC(CallGraphSCC &SCC) {
 
 // FIXME this is temporary function for test
 // the delay value should be calculated by using the SPD compiler
-unsigned IR2SPD::calcModuleDelay(CallGraphNode *N) {
+unsigned IR2SPD::calcModuleDelay(CallGraphNode *N) const {
   std::string FuncName = N->getFunction()->getName().str();
-  SPDModuleMapTy::iterator Iter = SPDModuleMap.find(FuncName);
+  SPDModuleMapTy::const_iterator Iter = SPDModuleMap.find(FuncName);
   if (Iter != SPDModuleMap.end()) {
     return Iter->second;
   }

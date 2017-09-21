@@ -21,16 +21,44 @@ static unsigned HDLCount;
 unsigned ValueCount;
 ValueNumMapTy ValueNumMap;
 
-static void emitFuncDecl(raw_ostream &OS, Function &F) {
-  OS << "Name      " << F.getName().str() << ";\n";
+// FIXME currently "fpga_main" is used to determine the entry function
+// The OpenMP compiler for SPGen will generate a metadata node for
+// a OMP Target directive, which can be used in this function.
+bool isEntryFunction(Function &F) {
+  std::string FunctionName = F.getName().str();
+  if (FunctionName.compare("fpga_main") == 0) {
+    return true;
+  }
+
+  return false;
+}
+
+static void emitInParams(raw_ostream &OS, Function &F) {
+  if (F.arg_empty()) {
+    if (isEntryFunction(F)) {
+      OS << "Main_In   {Mi::__SPD_sop, __SPD_eop}\n";
+    }
+
+    return;
+  }
 
   OS << "Main_In   {Mi::";
+  unsigned ArgCount = 0;
   for (const Argument &A : F.args()) {
-    OS << A.getName().str() << ", ";
+    if (ArgCount != 0) OS << ", ";
+    OS << A.getName().str();
+    ArgCount++;
   }
-  OS << "__SPD_sop, __SPD_eop};\n";
 
-  OS << "Main_Out  {Mo::";
+  if (isEntryFunction(F)) {
+    OS << ", __SPD_sop, __SPD_eop";
+  }
+
+  OS << "};\n";
+}
+
+static void emitOutParams(raw_ostream &OS, Function &F) {
+  bool HasReturnValue = false;
   Type *RetTy = F.getReturnType();
   switch (RetTy->getTypeID()) {
   case Type::VoidTyID:
@@ -38,12 +66,35 @@ static void emitFuncDecl(raw_ostream &OS, Function &F) {
   case Type::IntegerTyID:
   case Type::FloatTyID:
   case Type::DoubleTyID:
-    OS << "__SPD_ret, ";
+    HasReturnValue = true;
     break;
   default:
     llvm_unreachable("unsupported return type");
   }
-  OS << "__SPD_sop, __SPD_eop};\n";
+
+  if (!HasReturnValue) {
+    if (isEntryFunction(F)) {
+      OS << "Main_Out  {Mo::__SPD_sop, __SPD_eop};\n";
+    }
+
+    return;
+  }
+
+  OS << "Main_Out  {Mo::";
+  OS << "__SPD_ret";
+
+  if (isEntryFunction(F)) {
+    OS << ", __SPD_sop, __SPD_eop";
+  }
+
+  OS << "};\n";
+}
+
+static void emitFuncDecl(raw_ostream &OS, Function &F) {
+  OS << "Name      " << F.getName().str() << ";\n";
+
+  emitInParams(OS, F);
+  emitOutParams(OS, F);
 }
 
 // copied from WriteConstantInternal()@IR/AsmPrinter.cpp
@@ -258,7 +309,9 @@ void emitFunctionSPD(Function &F, SPDModuleMapTy &SPDModuleMap) {
     }
   }
 
-  OS << "\n// direct connection\n";
-  OS << "DRCT      (Mo::__SPD_sop, Mo::__SPD_eop)";
-  OS <<        " = (Mi::__SPD_sop, Mi::__SPD_eop);\n";
+  if (isEntryFunction(F)) {
+    OS << "\n// direct connection\n";
+    OS << "DRCT      (Mo::__SPD_sop, Mo::__SPD_eop)";
+    OS <<        " = (Mi::__SPD_sop, Mi::__SPD_eop);\n";
+  }
 }

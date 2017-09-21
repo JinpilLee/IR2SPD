@@ -7,4 +7,5 @@ using namespace llvm;
 // which one is better?
 typedef std::map<std::string, unsigned> SPDModuleMapTy;
 
-void emitFunctionSPD(Function &F, SPDModuleMapTy &SPDModuleMap);
+extern bool isEntryFunction(Function &F);
+extern void emitFunctionSPD(Function &F, SPDModuleMapTy &SPDModuleMap);

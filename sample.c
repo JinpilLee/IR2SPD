@@ -1,4 +1,3 @@
-/*
 int simple(int a, int b, int c, int d, int e) {
   return (a + b + c + d + e )* 100;
 }
@@ -25,7 +24,6 @@ float useparam(float tmp) {
   tmp2 = tmp2 / 10;
   return tmp2 * 30;
 }
-*/
 
 float add(float x, float y) {
   return x + y;
